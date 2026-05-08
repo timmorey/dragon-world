@@ -5,8 +5,13 @@ const minimap = document.getElementById("minimap");
 const mapCtx = minimap.getContext("2d");
 
 const healthFill = document.getElementById("healthFill");
+const levelCount = document.getElementById("levelCount");
+const xpCount = document.getElementById("xpCount");
+const nextXpCount = document.getElementById("nextXpCount");
 const flockCount = document.getElementById("flockCount");
 const sparkCount = document.getElementById("sparkCount");
+const foodCount = document.getElementById("foodCount");
+const eatButton = document.getElementById("eatButton");
 const overlay = document.getElementById("overlay");
 const overlayText = document.getElementById("overlayText");
 const startButton = document.getElementById("startButton");
@@ -19,9 +24,11 @@ const battleLog = document.getElementById("battleLog");
 
 const WORLD = { width: 8400, height: 6400 };
 const FLIGHT = { min: 32, max: 430 };
+const lakes = [];
+const WATER_CLEARANCE = 90;
 const keys = new Set();
 const touchDirs = new Set();
-const rand = mulberry32(0xD4A60A);
+let rand = mulberry32(createWorldSeed());
 
 let renderer;
 let scene;
@@ -35,6 +42,9 @@ const state = {
   running: false,
   lastTime: 0,
   sparks: 0,
+  food: 0,
+  level: 1,
+  xp: 0,
   shake: 0,
   message: "Find the scattered dragons.",
   messageTime: 4,
@@ -52,6 +62,7 @@ const player = {
   radius: 32,
   angle: 0,
   health: 100,
+  maxHealth: 100,
   invulnerable: 0,
   mesh: null,
   bob: 0,
@@ -62,6 +73,7 @@ const allies = [];
 const enemies = [];
 const flames = [];
 const particles = [];
+const foods = [];
 const decorations = [];
 const obstacles = [];
 
@@ -123,7 +135,8 @@ function setupScene() {
   scene.add(new THREE.HemisphereLight(0xccecff, 0x2c4c31, 1.7));
 }
 
-function initWorld() {
+function initWorld(progress = null) {
+  rand = mulberry32(createWorldSeed());
   clearGroup(worldGroup);
   clearGroup(entityGroup);
   clearGroup(particleGroup);
@@ -132,9 +145,14 @@ function initWorld() {
   enemies.length = 0;
   flames.length = 0;
   particles.length = 0;
+  foods.length = 0;
   decorations.length = 0;
   obstacles.length = 0;
-  state.sparks = 0;
+  lakes.length = 0;
+  state.sparks = progress?.sparks ?? 0;
+  state.food = progress?.food ?? 0;
+  state.level = progress?.level ?? 1;
+  state.xp = progress?.xp ?? 0;
   state.fireCooldown = 0;
   state.shake = 0;
   state.battle = null;
@@ -147,21 +165,25 @@ function initWorld() {
   player.vx = 0;
   player.vy = 0;
   player.vz = 0;
-  player.altitude = FLIGHT.min;
-  player.health = 100;
+  player.altitude = progress?.altitude ?? FLIGHT.min;
+  player.maxHealth = getMaxHealth();
+  player.health = progress?.health ?? player.maxHealth;
   player.invulnerable = 1.5;
   player.bob = 0;
 
+  randomizeLakes();
   makeTerrain();
   player.mesh = makeDragonMesh(dragonPalette[0], 1.18);
   entityGroup.add(player.mesh);
 
   for (let i = 0; i < 760; i += 1) {
     const type = rand() > 0.82 ? "crystal" : rand() > 0.4 ? "tree" : "stone";
+    const radius = type === "tree" ? 34 + rand() * 58 : 12 + rand() * 42;
+    const position = findDryPosition(radius);
     const item = {
-      x: rand() * WORLD.width,
-      y: rand() * WORLD.height,
-      r: type === "tree" ? 34 + rand() * 58 : 12 + rand() * 42,
+      x: position.x,
+      y: position.y,
+      r: radius,
       type,
       hue: rand(),
     };
@@ -171,9 +193,10 @@ function initWorld() {
   }
 
   for (let i = 0; i < 20; i += 1) {
+    const position = findDryPosition(90, 260);
     const dragon = {
-      x: 260 + rand() * (WORLD.width - 520),
-      y: 260 + rand() * (WORLD.height - 520),
+      x: position.x,
+      y: position.y,
       radius: 30,
       altitude: FLIGHT.min + 12 + rand() * 38,
       vz: 0,
@@ -189,12 +212,20 @@ function initWorld() {
 
   for (let i = 0; i < 44; i += 1) {
     const kind = enemyKinds[i % enemyKinds.length];
+    const position = findDryPosition(kind.radius * 2.4, 220);
+    const level = getRandomEnemyLevel();
+    const maxHealth = getEnemyMaxHealth(kind, level);
+    const power = getEnemyPower(kind, level);
     const enemy = {
       ...kind,
-      x: 220 + rand() * (WORLD.width - 440),
-      y: 220 + rand() * (WORLD.height - 440),
+      x: position.x,
+      y: position.y,
+      level,
+      health: maxHealth,
+      power,
       angle: rand() * Math.PI * 2,
-      maxHealth: kind.health,
+      maxHealth,
+      xp: getEnemyExperienceForLevel(kind, level),
       hurt: 0,
       battleCooldown: 0,
       wander: rand() * Math.PI * 2,
@@ -219,26 +250,173 @@ function makeTerrain() {
   ground.receiveShadow = true;
   worldGroup.add(ground);
 
-  const water = new THREE.Mesh(
-    new THREE.PlaneGeometry(WORLD.width * 0.9, 360, 1, 1),
-    new THREE.MeshStandardMaterial({ color: 0x2f8fb2, roughness: 0.5, metalness: 0.08 })
-  );
-  water.rotation.x = -Math.PI / 2;
-  water.rotation.z = -0.16;
-  water.position.set(WORLD.width * 0.58, 1, WORLD.height * 0.73);
-  worldGroup.add(water);
+  const waterMaterial = new THREE.MeshStandardMaterial({ color: 0x2f8fb2, roughness: 0.5, metalness: 0.08 });
+  worldGroup.add(makeLakes(waterMaterial));
 
   const rimMaterial = new THREE.MeshStandardMaterial({ color: 0x31523a, roughness: 0.9 });
   for (let i = 0; i < 88; i += 1) {
     const radius = 60 + rand() * 110;
+    const position = findDryPosition(radius);
     const hill = new THREE.Mesh(new THREE.DodecahedronGeometry(radius, 0), rimMaterial);
     hill.scale.y = 0.35 + rand() * 0.5;
-    hill.position.set(rand() * WORLD.width, hill.geometry.parameters.radius * hill.scale.y * 0.5, rand() * WORLD.height);
+    hill.position.set(position.x, hill.geometry.parameters.radius * hill.scale.y * 0.5, position.y);
     hill.castShadow = true;
     hill.receiveShadow = true;
     addObstacle(hill.position.x, hill.position.z, radius * 0.72, radius * hill.scale.y);
     worldGroup.add(hill);
   }
+
+  for (let i = 0; i < 9; i += 1) {
+    const position = findDryPosition(360, 520);
+    const rangeX = position.x;
+    const rangeZ = position.y;
+    const range = makeMountainRange(rangeX, rangeZ, 4 + Math.floor(rand() * 4));
+    worldGroup.add(range);
+  }
+}
+
+function randomizeLakes() {
+  const targetCount = 4 + Math.floor(rand() * 3);
+  for (let attempt = 0; lakes.length < targetCount && attempt < 90; attempt += 1) {
+    const rx = 420 + rand() * 520;
+    const rz = 300 + rand() * 360;
+    const x = rx + 360 + rand() * (WORLD.width - (rx + 360) * 2);
+    const z = rz + 320 + rand() * (WORLD.height - (rz + 320) * 2);
+    const overlaps = lakes.some((lake) => {
+      const dx = (x - lake.x) / (rx + lake.rx + 360);
+      const dz = (z - lake.z) / (rz + lake.rz + 360);
+      return dx * dx + dz * dz < 1;
+    });
+    if (!overlaps) lakes.push({ x, z, rx, rz, rotation: rand() * Math.PI * 2 });
+  }
+}
+
+function makeLakes(waterMaterial) {
+  const group = new THREE.Group();
+  const shoreMaterial = new THREE.MeshStandardMaterial({ color: 0x8ca36e, roughness: 0.9 });
+  lakes.forEach((lakeData) => {
+    const lake = new THREE.Mesh(new THREE.CircleGeometry(1, 72), waterMaterial);
+    lake.rotation.x = -Math.PI / 2;
+    lake.rotation.z = lakeData.rotation;
+    lake.scale.set(lakeData.rx, lakeData.rz, 1);
+    lake.position.set(lakeData.x, 1.2, lakeData.z);
+    group.add(lake);
+
+    let placedShoreRocks = 0;
+    for (let attempt = 0; placedShoreRocks < 12 && attempt < 42; attempt += 1) {
+      const angle = (attempt / 12) * Math.PI * 2 + rand() * 0.22;
+      const x = lakeData.x + Math.cos(angle) * (lakeData.rx + 80 + rand() * 90);
+      const z = lakeData.z + Math.sin(angle) * (lakeData.rz + 70 + rand() * 80);
+      if (isWaterArea(x, z, 45)) continue;
+      const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(18 + rand() * 22, 0), shoreMaterial);
+      rock.scale.y = 0.26 + rand() * 0.2;
+      rock.position.set(x, 5, z);
+      rock.rotation.y = rand() * Math.PI * 2;
+      rock.castShadow = true;
+      rock.receiveShadow = true;
+      group.add(rock);
+      placedShoreRocks += 1;
+    }
+  });
+
+  return group;
+}
+
+function makeMountainRange(x, z, count) {
+  const group = new THREE.Group();
+  const rockMaterial = new THREE.MeshStandardMaterial({ color: 0x6f7378, roughness: 0.86 });
+  const darkRockMaterial = new THREE.MeshStandardMaterial({ color: 0x4e555c, roughness: 0.92 });
+  const snowMaterial = new THREE.MeshStandardMaterial({ color: 0xe8f5f7, roughness: 0.62 });
+
+  for (let i = 0; i < count; i += 1) {
+    const angle = rand() * Math.PI * 2;
+    const offset = rand() * 260;
+    const px = x + Math.cos(angle) * offset;
+    const pz = z + Math.sin(angle) * offset;
+    const radius = 120 + rand() * 150;
+    if (isWaterArea(px, pz, radius + WATER_CLEARANCE)) continue;
+    const height = 260 + rand() * 320;
+    const peak = new THREE.Mesh(new THREE.ConeGeometry(radius, height, 7), i % 2 === 0 ? rockMaterial : darkRockMaterial);
+    peak.position.set(px, height * 0.5, pz);
+    peak.rotation.y = rand() * Math.PI * 2;
+    peak.castShadow = true;
+    peak.receiveShadow = true;
+    group.add(peak);
+
+    const snow = new THREE.Mesh(new THREE.ConeGeometry(radius * 0.36, height * 0.24, 7), snowMaterial);
+    snow.position.set(px, height * 0.88, pz);
+    snow.rotation.y = peak.rotation.y;
+    snow.castShadow = true;
+    group.add(snow);
+
+    addObstacle(px, pz, radius * 0.72, height);
+  }
+
+  return group;
+}
+
+function findDryPosition(radius, margin = 0) {
+  const min = margin + radius;
+  const maxX = WORLD.width - margin - radius;
+  const maxY = WORLD.height - margin - radius;
+  const padding = radius + WATER_CLEARANCE;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const x = min + rand() * Math.max(1, maxX - min);
+    const y = min + rand() * Math.max(1, maxY - min);
+    if (!isWaterArea(x, y, padding)) return { x, y };
+  }
+
+  const columns = 14;
+  const rows = 12;
+  const offsetX = rand();
+  const offsetY = rand();
+  for (let row = 0; row < rows; row += 1) {
+    for (let column = 0; column < columns; column += 1) {
+      const x = min + (((column + offsetX) % columns) / Math.max(1, columns - 1)) * Math.max(1, maxX - min);
+      const y = min + (((row + offsetY) % rows) / Math.max(1, rows - 1)) * Math.max(1, maxY - min);
+      if (!isWaterArea(x, y, padding)) return { x, y };
+    }
+  }
+
+  return { x: min, y: min };
+}
+
+function createWorldSeed() {
+  if (window.crypto?.getRandomValues) {
+    const values = new Uint32Array(1);
+    window.crypto.getRandomValues(values);
+    return values[0];
+  }
+  return (Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0;
+}
+
+function isWaterArea(x, y, padding = 0) {
+  return lakes.some((lake) => isPointInEllipse(x, y, lake.x, lake.z, lake.rx, lake.rz, padding));
+}
+
+function isObstacleArea(x, y, radius) {
+  return obstacles.some((obstacle) => {
+    const dx = x - obstacle.x;
+    const dy = y - obstacle.y;
+    const minDistance = radius + obstacle.radius;
+    return dx * dx + dy * dy < minDistance * minDistance;
+  });
+}
+
+function isPointInRotatedRect(x, y, cx, cy, width, height, rotation, padding) {
+  const dx = x - cx;
+  const dy = y - cy;
+  const cos = Math.cos(-rotation);
+  const sin = Math.sin(-rotation);
+  const localX = dx * cos - dy * sin;
+  const localY = dx * sin + dy * cos;
+  return Math.abs(localX) <= width * 0.5 + padding && Math.abs(localY) <= height * 0.5 + padding;
+}
+
+function isPointInEllipse(x, y, cx, cy, rx, ry, padding) {
+  const nx = (x - cx) / (rx + padding);
+  const ny = (y - cy) / (ry + padding);
+  return nx * nx + ny * ny <= 1;
 }
 
 function addDecorationObstacle(item) {
@@ -620,24 +798,121 @@ function makeWing(ax, az, bx, bz, cx, cz, material) {
 
 function makeEnemyMesh(enemy) {
   const group = new THREE.Group();
-  const bodyMaterial = new THREE.MeshStandardMaterial({ color: enemy.color, roughness: 0.64 });
-  const accentMaterial = new THREE.MeshStandardMaterial({ color: enemy.accent, roughness: 0.52 });
-  const body = new THREE.Mesh(new THREE.IcosahedronGeometry(enemy.radius, 1), bodyMaterial);
-  body.scale.set(1.15, 0.72, 0.9);
-  body.castShadow = true;
-  group.add(body);
+  const bodyMaterial = new THREE.MeshStandardMaterial({ color: enemy.color, roughness: 0.72 });
+  const shellMaterial = new THREE.MeshStandardMaterial({ color: enemy.accent, roughness: 0.58, metalness: 0.08 });
+  const legMaterial = new THREE.MeshStandardMaterial({ color: 0x1b130f, roughness: 0.64 });
+  const eyeMaterial = new THREE.MeshStandardMaterial({ color: 0xffe27a, emissive: 0xff9c20, emissiveIntensity: 1.1 });
 
-  const beak = new THREE.Mesh(new THREE.ConeGeometry(enemy.radius * 0.32, enemy.radius * 1.05, 5), accentMaterial);
-  beak.rotation.z = -Math.PI / 2;
-  beak.position.x = enemy.radius * 0.92;
-  beak.castShadow = true;
-  group.add(beak);
+  const segmentCount = 11;
+  const spacing = enemy.radius * 0.58;
+  for (let i = 0; i < segmentCount; i += 1) {
+    const t = i / (segmentCount - 1);
+    const x = enemy.radius * 1.6 - i * spacing;
+    const z = Math.sin(t * Math.PI * 2) * enemy.radius * 0.08;
+    const radius = enemy.radius * (i === 0 ? 0.62 : 0.48 - t * 0.09);
+    const segment = new THREE.Mesh(new THREE.SphereGeometry(radius, 14, 10), bodyMaterial);
+    segment.scale.set(i === 0 ? 1.15 : 0.98, 0.44, 0.72);
+    segment.position.set(x, 20 + Math.sin(t * Math.PI) * 3, z);
+    segment.castShadow = true;
+    group.add(segment);
 
-  const spine = new THREE.Mesh(new THREE.ConeGeometry(enemy.radius * 0.18, enemy.radius * 0.8, 4), accentMaterial);
-  spine.position.set(-enemy.radius * 0.15, enemy.radius * 0.62, 0);
-  spine.castShadow = true;
-  group.add(spine);
+    const shell = new THREE.Mesh(new THREE.SphereGeometry(radius * 0.82, 10, 8), shellMaterial);
+    shell.scale.set(0.92, 0.18, 0.62);
+    shell.position.set(x, 27 + Math.sin(t * Math.PI) * 3, z);
+    shell.castShadow = true;
+    group.add(shell);
+
+    if (i > 0 && i < segmentCount - 1) {
+      group.add(makeCentipedeLeg(x, z, 1, radius, legMaterial));
+      group.add(makeCentipedeLeg(x, z, -1, radius, legMaterial));
+    }
+  }
+
+  const mandibleA = makeBone(
+    [new THREE.Vector3(enemy.radius * 2.0, 21, 10), new THREE.Vector3(enemy.radius * 2.35, 16, 22)],
+    legMaterial,
+    2
+  );
+  const mandibleB = makeBone(
+    [new THREE.Vector3(enemy.radius * 2.0, 21, -10), new THREE.Vector3(enemy.radius * 2.35, 16, -22)],
+    legMaterial,
+    2
+  );
+  group.add(mandibleA, mandibleB);
+
+  const antennaA = makeBone(
+    [new THREE.Vector3(enemy.radius * 1.9, 31, 9), new THREE.Vector3(enemy.radius * 2.35, 46, 24)],
+    shellMaterial,
+    1.25
+  );
+  const antennaB = makeBone(
+    [new THREE.Vector3(enemy.radius * 1.9, 31, -9), new THREE.Vector3(enemy.radius * 2.35, 46, -24)],
+    shellMaterial,
+    1.25
+  );
+  group.add(antennaA, antennaB);
+
+  const eyeA = new THREE.Mesh(new THREE.SphereGeometry(3.4, 8, 8), eyeMaterial);
+  eyeA.position.set(enemy.radius * 2.02, 31, 8);
+  const eyeB = eyeA.clone();
+  eyeB.position.z = -8;
+  group.add(eyeA, eyeB);
+
+  const label = makeEnemyLevelLabel(enemy.level || 1);
+  label.position.set(0, 78, 0);
+  group.add(label);
+
+  group.traverse((child) => {
+    if (child.isMesh) child.castShadow = true;
+  });
   return group;
+}
+
+function makeEnemyLevelLabel(level) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 128;
+  canvas.height = 64;
+  const context = canvas.getContext("2d");
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = "rgba(8, 12, 16, 0.78)";
+  roundCanvasRect(context, 14, 10, 100, 42, 12);
+  context.fill();
+  context.strokeStyle = "rgba(255, 255, 255, 0.75)";
+  context.lineWidth = 3;
+  context.stroke();
+  context.fillStyle = "#fff4c2";
+  context.font = "900 25px system-ui, sans-serif";
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillText(`Lv ${level}`, 64, 32);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+  const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
+  const sprite = new THREE.Sprite(material);
+  sprite.scale.set(78, 39, 1);
+  return sprite;
+}
+
+function roundCanvasRect(context, x, y, width, height, radius) {
+  context.beginPath();
+  context.moveTo(x + radius, y);
+  context.lineTo(x + width - radius, y);
+  context.quadraticCurveTo(x + width, y, x + width, y + radius);
+  context.lineTo(x + width, y + height - radius);
+  context.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+  context.lineTo(x + radius, y + height);
+  context.quadraticCurveTo(x, y + height, x, y + height - radius);
+  context.lineTo(x, y + radius);
+  context.quadraticCurveTo(x, y, x + radius, y);
+  context.closePath();
+}
+
+function makeCentipedeLeg(x, z, side, radius, material) {
+  const hip = new THREE.Vector3(x, 17, z + side * radius * 0.52);
+  const knee = new THREE.Vector3(x - radius * 0.18, 10, z + side * radius * 1.05);
+  const foot = new THREE.Vector3(x + radius * 0.18, 4, z + side * radius * 1.5);
+  return makeBone([hip, knee, foot], material, 1.7);
 }
 
 function makeDecoration(item) {
@@ -794,10 +1069,18 @@ function update(dt) {
   player.vx = player.vx * 0.82 + Math.cos(player.angle) * controls.throttle * speed * 0.18;
   player.vy = player.vy * 0.82 + Math.sin(player.angle) * controls.throttle * speed * 0.18;
   player.vz = player.vz * 0.82 + controls.climb * climbSpeed * 0.18;
-  player.x = clamp(player.x + player.vx * dt, 70, WORLD.width - 70);
-  player.y = clamp(player.y + player.vy * dt, 70, WORLD.height - 70);
+  const nextX = player.x + player.vx * dt;
+  const nextY = player.y + player.vy * dt;
   player.altitude = clamp(player.altitude + player.vz * dt, FLIGHT.min, FLIGHT.max);
   if (player.altitude === FLIGHT.min || player.altitude === FLIGHT.max) player.vz *= 0.3;
+  const exitSide = getExitSide(nextX, nextY);
+  if (exitSide) {
+    transitionToNewWorld(exitSide, nextX, nextY);
+    updateHud();
+    return;
+  }
+  player.x = clamp(nextX, 70, WORLD.width - 70);
+  player.y = clamp(nextY, 70, WORLD.height - 70);
   if (resolveFeatureCollision(player)) {
     player.vx *= 0.25;
     player.vy *= 0.25;
@@ -809,6 +1092,7 @@ function update(dt) {
   updateDragons(dt);
   updateEnemies(dt);
   updateFlames(dt);
+  updateFoods(dt);
   updateParticles(dt);
   updateMeshes(dt);
   updateHud();
@@ -826,6 +1110,84 @@ function getMovementControls() {
     turn: Number(right) - Number(left),
     climb: Number(climbUp) - Number(climbDown),
   };
+}
+
+function getExitSide(x, y) {
+  const edge = 70;
+  const overflow = [
+    { side: "west", amount: edge - x },
+    { side: "east", amount: x - (WORLD.width - edge) },
+    { side: "north", amount: edge - y },
+    { side: "south", amount: y - (WORLD.height - edge) },
+  ].filter((entry) => entry.amount > 0);
+  if (!overflow.length) return null;
+  overflow.sort((a, b) => b.amount - a.amount);
+  return overflow[0].side;
+}
+
+function transitionToNewWorld(exitSide, rawX, rawY) {
+  const carried = {
+    health: player.health,
+    maxHealth: player.maxHealth,
+    altitude: player.altitude,
+    sparks: state.sparks,
+    food: state.food,
+    level: state.level,
+    xp: state.xp,
+    allies: allies.map((ally) => ally.colors),
+  };
+  initWorld(carried);
+  const spawn = findEdgeSpawn(exitSide, rawX, rawY);
+  player.x = spawn.x;
+  player.y = spawn.y;
+  player.vx = 0;
+  player.vy = 0;
+  player.vz = 0;
+  player.maxHealth = carried.maxHealth;
+  state.message = "A new world square unfolds.";
+  state.messageTime = 2.8;
+  restoreAllies(carried.allies);
+  updateMeshes(0);
+}
+
+function findEdgeSpawn(exitSide, rawX, rawY) {
+  const inset = 150;
+  const base = {
+    west: { x: WORLD.width - inset, y: clamp(rawY, inset, WORLD.height - inset), axis: "y" },
+    east: { x: inset, y: clamp(rawY, inset, WORLD.height - inset), axis: "y" },
+    north: { x: clamp(rawX, inset, WORLD.width - inset), y: WORLD.height - inset, axis: "x" },
+    south: { x: clamp(rawX, inset, WORLD.width - inset), y: inset, axis: "x" },
+  }[exitSide];
+  const offsets = [0, 120, -120, 260, -260, 440, -440, 680, -680, 940, -940];
+  for (const offset of offsets) {
+    const x = base.axis === "x" ? clamp(base.x + offset, inset, WORLD.width - inset) : base.x;
+    const y = base.axis === "y" ? clamp(base.y + offset, inset, WORLD.height - inset) : base.y;
+    if (!isWaterArea(x, y, player.radius + WATER_CLEARANCE) && !isObstacleArea(x, y, player.radius + 20)) {
+      return { x, y };
+    }
+  }
+  return findDryPosition(player.radius + 40, inset);
+}
+
+function restoreAllies(allyColors) {
+  allies.length = 0;
+  allyColors.forEach((colors, index) => {
+    const gap = 86 + index * 12;
+    const ally = {
+      x: clamp(player.x - Math.cos(player.angle) * gap, 70, WORLD.width - 70),
+      y: clamp(player.y - Math.sin(player.angle) * gap, 70, WORLD.height - 70),
+      radius: 30,
+      altitude: player.altitude,
+      vz: 0,
+      angle: player.angle,
+      colors,
+      joined: true,
+      bob: rand() * 10,
+      mesh: makeDragonMesh(colors, 0.95),
+    };
+    allies.push(ally);
+    entityGroup.add(ally.mesh);
+  });
 }
 
 function updateAllies(dt) {
@@ -878,11 +1240,27 @@ function updateEnemies(dt) {
 
   for (let i = enemies.length - 1; i >= 0; i -= 1) {
     if (enemies[i].health <= 0) {
-      state.sparks += 1;
-      burst(enemies[i].x, enemies[i].y, "#ffd166", 22);
-      entityGroup.remove(enemies[i].mesh);
-      enemies.splice(i, 1);
-      if (enemies.length === 0) endGame(true);
+      defeatEnemy(enemies[i]);
+    }
+  }
+}
+
+function updateFoods(dt) {
+  for (let i = foods.length - 1; i >= 0; i -= 1) {
+    const food = foods[i];
+    food.bob += dt * 3.4;
+    if (food.mesh) {
+      food.mesh.position.y = 18 + Math.sin(food.bob) * 4;
+      food.mesh.rotation.y += dt * 1.4;
+    }
+    if (player.altitude < 115 && distance(player, food) < player.radius + food.radius) {
+      state.food += 1;
+      state.message = "Food collected.";
+      state.messageTime = 1.8;
+      burst(food.x, food.y, "#ffcf6e", 12);
+      entityGroup.remove(food.mesh);
+      foods.splice(i, 1);
+      updateHud();
     }
   }
 }
@@ -901,7 +1279,7 @@ function startBattle(enemy) {
   state.message = `${capitalize(enemy.name)} encounter`;
   state.messageTime = 2;
   battlePanel.classList.remove("hidden");
-  setBattleLog(`A ${enemy.name} challenges your flight.`);
+  setBattleLog(`A level ${enemy.level} ${enemy.name} challenges your flight.`);
   updateBattleUi();
 }
 
@@ -916,13 +1294,15 @@ function performBattleAction(action) {
 
   let playerText = "";
   if (action === "attack") {
-    const damage = 3 + Math.floor(allies.length / 3);
+    const roll = rollDamage(getAttackDamage("attack"));
+    const damage = roll.damage;
     damageEnemyInBattle(enemy, damage);
-    playerText = `You strike the ${enemy.name} for ${damage}.`;
+    playerText = formatPlayerAttackText(`You strike the ${enemy.name}`, roll);
   } else if (action === "fire") {
-    const damage = 5 + Math.floor(allies.length / 2);
+    const roll = rollDamage(getAttackDamage("fire"));
+    const damage = roll.damage;
     damageEnemyInBattle(enemy, damage);
-    playerText = `Fire washes over the ${enemy.name} for ${damage}.`;
+    playerText = formatPlayerAttackText(`Fire washes over the ${enemy.name}`, roll);
   } else if (action === "rally") {
     battle.defending = true;
     heal(8 + allies.length * 2);
@@ -941,32 +1321,176 @@ function performBattleAction(action) {
     return;
   }
 
-  const enemyDamage = Math.max(4, (enemy.power || 8) - Math.floor(allies.length / 2));
-  const finalDamage = battle.defending ? Math.ceil(enemyDamage * 0.45) : enemyDamage;
+  const enemyBaseDamage = Math.max(4, (enemy.power || 8) - Math.floor(allies.length / 2));
+  const enemyRoll = rollDamage(enemyBaseDamage);
+  const finalDamage = battle.defending ? Math.ceil(enemyRoll.damage * 0.45) : enemyRoll.damage;
   battle.defending = false;
   player.health = Math.max(0, player.health - finalDamage);
   player.invulnerable = 0.6;
-  state.shake = 0.8;
-  burst(player.x, player.y, "#ff746d", 10);
-  setBattleLog(`${playerText} The ${enemy.name} counters for ${finalDamage}.`);
+  if (finalDamage > 0) {
+    state.shake = enemyRoll.kind === "critical" ? 1.2 : 0.8;
+    burst(player.x, player.y, "#ff746d", 10 + Math.min(14, finalDamage));
+  }
+  setBattleLog(`${playerText} ${formatEnemyAttackText(enemy.name, enemyRoll, finalDamage)}`);
   updateBattleUi();
   updateHud();
   if (player.health <= 0) endGame(false);
 }
 
 function damageEnemyInBattle(enemy, damage) {
+  if (damage <= 0) return;
   enemy.health -= damage;
   enemy.hurt = 0.45;
   burst(enemy.x, enemy.y, enemy.accent, 12 + damage * 2);
 }
 
+function rollDamage(baseDamage) {
+  const roll = rand();
+  let multiplier = 1;
+  let kind = "normal";
+  if (roll < 0.08) {
+    multiplier = 0;
+    kind = "miss";
+  } else if (roll < 0.18) {
+    multiplier = 0.5;
+    kind = "glancing";
+  } else if (roll > 0.96) {
+    multiplier = 2.35;
+    kind = "critical";
+  } else if (roll > 0.86) {
+    multiplier = 1.55;
+    kind = "heavy";
+  }
+  return {
+    damage: Math.max(0, Math.round(baseDamage * multiplier)),
+    kind,
+  };
+}
+
+function formatPlayerAttackText(prefix, roll) {
+  if (roll.kind === "miss") return `${prefix}, but misses.`;
+  if (roll.kind === "critical") return `${prefix} for ${roll.damage}. Critical hit!`;
+  if (roll.kind === "heavy") return `${prefix} for ${roll.damage}. Heavy hit!`;
+  if (roll.kind === "glancing") return `${prefix} for ${roll.damage}. Glancing blow.`;
+  return `${prefix} for ${roll.damage}.`;
+}
+
+function formatEnemyAttackText(name, roll, finalDamage) {
+  if (roll.kind === "miss") return `The ${name} counters, but misses.`;
+  if (roll.kind === "critical") return `The ${name} lands a critical counter for ${finalDamage}.`;
+  if (roll.kind === "heavy") return `The ${name} hits hard for ${finalDamage}.`;
+  if (roll.kind === "glancing") return `The ${name} grazes you for ${finalDamage}.`;
+  return `The ${name} counters for ${finalDamage}.`;
+}
+
+function getAttackDamage(kind) {
+  const levelBonus = Math.floor((state.level - 1) * 1.6);
+  if (kind === "fire") return 5 + levelBonus + Math.floor(allies.length / 2);
+  return 3 + levelBonus + Math.floor(allies.length / 3);
+}
+
+function getRandomEnemyLevel() {
+  const roll = rand();
+  const spread = roll < 0.58 ? 0 : roll < 0.82 ? 1 : roll < 0.94 ? 2 : 3;
+  return Math.max(state.level, state.level + spread);
+}
+
+function getEnemyMaxHealth(kind, level) {
+  return kind.health + (level - 1) * 7 + Math.floor(rand() * (level + 3));
+}
+
+function getEnemyPower(kind, level) {
+  return kind.power + Math.floor((level - 1) * 2.2);
+}
+
+function getEnemyExperienceForLevel(kind, level) {
+  return Math.max(6, Math.round(kind.health * 0.7 + kind.power + level * 5));
+}
+
 function defeatEnemy(enemy) {
   state.sparks += 1;
+  grantExperience(enemy.xp || getEnemyExperienceForLevel(enemy, enemy.level || 1));
   burst(enemy.x, enemy.y, "#ffd166", 24);
+  dropFood(enemy.x, enemy.y);
   entityGroup.remove(enemy.mesh);
   const index = enemies.indexOf(enemy);
   if (index !== -1) enemies.splice(index, 1);
   if (enemies.length === 0) endGame(true);
+}
+
+function dropFood(x, y) {
+  const food = {
+    x: clamp(x + (rand() - 0.5) * 70, 60, WORLD.width - 60),
+    y: clamp(y + (rand() - 0.5) * 70, 60, WORLD.height - 60),
+    radius: 34,
+    bob: rand() * Math.PI * 2,
+    mesh: makeFoodMesh(),
+  };
+  food.mesh.position.set(food.x, 18, food.y);
+  foods.push(food);
+  entityGroup.add(food.mesh);
+}
+
+function makeFoodMesh() {
+  const group = new THREE.Group();
+  const meatMaterial = new THREE.MeshStandardMaterial({ color: 0xd05a3a, roughness: 0.58 });
+  const boneMaterial = new THREE.MeshStandardMaterial({ color: 0xf7ead0, roughness: 0.38 });
+  const meat = new THREE.Mesh(new THREE.SphereGeometry(15, 14, 10), meatMaterial);
+  meat.scale.set(1.25, 0.82, 0.9);
+  const bone = new THREE.Mesh(new THREE.CylinderGeometry(3.6, 3.6, 34, 8), boneMaterial);
+  bone.rotation.z = Math.PI / 2;
+  const capA = new THREE.Mesh(new THREE.SphereGeometry(5, 8, 8), boneMaterial);
+  capA.position.x = -20;
+  const capB = capA.clone();
+  capB.position.x = 20;
+  group.add(bone, capA, capB, meat);
+  group.traverse((child) => {
+    if (child.isMesh) child.castShadow = true;
+  });
+  return group;
+}
+
+function eatFood() {
+  if (!state.running || state.food <= 0 || player.health >= player.maxHealth) return;
+  state.food -= 1;
+  heal(28);
+  state.message = "You eat food and recover health.";
+  state.messageTime = 2;
+  burst(player.x, player.y, "#8ee68e", 14);
+  updateHud();
+}
+
+function grantExperience(amount) {
+  state.xp += amount;
+  let leveled = false;
+  while (state.xp >= getNextLevelXp()) {
+    state.xp -= getNextLevelXp();
+    state.level += 1;
+    leveled = true;
+  }
+  if (leveled) {
+    player.maxHealth = getMaxHealth();
+    heal(Math.ceil(player.maxHealth * 0.45));
+    state.message = `Level ${state.level}!`;
+    state.messageTime = 3;
+    burst(player.x, player.y, "#9fffd0", 24);
+  } else {
+    state.message = `Gained ${amount} XP.`;
+    state.messageTime = 2;
+  }
+  updateHud();
+}
+
+function getEnemyExperience(enemy) {
+  return Math.max(6, Math.round((enemy.maxHealth || enemy.health || 10) * 0.8 + (enemy.power || 8)));
+}
+
+function getNextLevelXp() {
+  return 10 + (state.level - 1) * 8;
+}
+
+function getMaxHealth() {
+  return 100 + (state.level - 1) * 15;
 }
 
 function endBattle(pushAway) {
@@ -986,7 +1510,7 @@ function updateBattleUi() {
   if (!state.battle) return;
   const enemy = state.battle.enemy;
   const max = state.battle.enemyMaxHealth;
-  battleName.textContent = capitalize(enemy.name);
+  battleName.textContent = `Lv ${enemy.level} ${capitalize(enemy.name)}`;
   battleHealth.textContent = `${Math.max(0, enemy.health)} / ${max}`;
   battleEnemyFill.style.width = `${clamp(enemy.health / max, 0, 1) * 100}%`;
 }
@@ -1132,7 +1656,7 @@ function makeFlameMesh() {
 }
 
 function heal(amount) {
-  player.health = Math.min(100, player.health + amount);
+  player.health = Math.min(player.maxHealth, player.health + amount);
 }
 
 function endGame(won) {
@@ -1147,9 +1671,14 @@ function endGame(won) {
 }
 
 function updateHud() {
-  healthFill.style.width = `${player.health}%`;
+  healthFill.style.width = `${clamp(player.health / player.maxHealth, 0, 1) * 100}%`;
+  levelCount.textContent = String(state.level);
+  xpCount.textContent = String(state.xp);
+  nextXpCount.textContent = String(getNextLevelXp());
   flockCount.textContent = String(allies.length);
   sparkCount.textContent = String(state.sparks);
+  foodCount.textContent = String(state.food);
+  eatButton.disabled = state.food <= 0 || player.health >= player.maxHealth;
 }
 
 function render() {
@@ -1174,6 +1703,8 @@ function drawMinimap() {
   });
   mapCtx.fillStyle = "#ff6a6f";
   enemies.forEach((e) => dot(mapCtx, (e.x / WORLD.width) * w, (e.y / WORLD.height) * h, 2.5));
+  mapCtx.fillStyle = "#ffcf6e";
+  foods.forEach((f) => dot(mapCtx, (f.x / WORLD.width) * w, (f.y / WORLD.height) * h, 2.2));
 }
 
 function burst(x, y, color, count) {
@@ -1263,6 +1794,7 @@ window.addEventListener("keydown", (event) => {
     else if (state.running) breatheFire();
     else startGame();
   }
+  if (key === "h") eatFood();
 });
 
 window.addEventListener("keyup", (event) => {
@@ -1271,6 +1803,7 @@ window.addEventListener("keyup", (event) => {
 
 startButton.addEventListener("click", startGame);
 flameButton.addEventListener("pointerdown", breatheFire);
+eatButton.addEventListener("click", eatFood);
 document.querySelectorAll("[data-battle-action]").forEach((button) => {
   button.addEventListener("click", () => performBattleAction(button.dataset.battleAction));
 });

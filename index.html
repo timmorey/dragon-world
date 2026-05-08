@@ -16,8 +16,13 @@
           <div class="meter" aria-label="Health">
             <span class="meter-fill" id="healthFill"></span>
           </div>
+          <div class="stat">Lv <span id="levelCount">1</span></div>
+          <div class="stat"><span id="xpCount">0</span>/<span id="nextXpCount">10</span> XP</div>
           <div class="stat"><span id="flockCount">0</span> allies</div>
           <div class="stat"><span id="sparkCount">0</span> sparks</div>
+          <button class="stat stat-button" id="eatButton" type="button">
+            Eat <span id="foodCount">0</span>
+          </button>
         </div>
 
         <canvas id="minimap" width="150" height="150" aria-label="Minimap"></canvas>

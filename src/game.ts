@@ -1,3 +1,5 @@
+import * as THREE from "three";
+
 const canvas = document.getElementById("game");
 const minimap = document.getElementById("minimap");
 const mapCtx = minimap.getContext("2d");
@@ -15,14 +17,12 @@ const battleHealth = document.getElementById("battleHealth");
 const battleEnemyFill = document.getElementById("battleEnemyFill");
 const battleLog = document.getElementById("battleLog");
 
-const THREE_URL = "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js";
 const WORLD = { width: 8400, height: 6400 };
 const FLIGHT = { min: 32, max: 430 };
 const keys = new Set();
 const touchDirs = new Set();
 const rand = mulberry32(0xD4A60A);
 
-let THREE;
 let renderer;
 let scene;
 let camera;
@@ -81,16 +81,15 @@ const enemyKinds = [
 
 bootstrap();
 
-async function bootstrap() {
+function bootstrap() {
   try {
-    THREE = await import(THREE_URL);
     setupScene();
     initWorld();
     resize();
     render();
     state.ready = true;
   } catch (error) {
-    overlayText.textContent = "Three.js could not load. Check your connection and refresh.";
+    overlayText.textContent = "Dragon World could not start. Check the console and refresh.";
     startButton.textContent = "Retry";
     console.error(error);
   }

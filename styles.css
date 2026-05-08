@@ -1,0 +1,366 @@
+:root {
+  color-scheme: dark;
+  --ink: #f8fbff;
+  --muted: rgba(248, 251, 255, 0.7);
+  --panel: rgba(12, 19, 27, 0.74);
+  --line: rgba(255, 255, 255, 0.16);
+  --danger: #ff5c66;
+  --gold: #ffc84d;
+  --green: #69d28f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  background: #081018;
+  color: var(--ink);
+}
+
+button {
+  border: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.game-shell {
+  display: grid;
+  width: 100vw;
+  height: 100vh;
+  min-height: 480px;
+  place-items: center;
+  background:
+    radial-gradient(circle at 18% 15%, rgba(63, 161, 131, 0.25), transparent 34%),
+    radial-gradient(circle at 82% 12%, rgba(232, 129, 75, 0.18), transparent 30%),
+    linear-gradient(135deg, #071018, #102317 46%, #16131d);
+}
+
+.stage {
+  position: relative;
+  width: min(100vw, 1600px);
+  height: min(100vh, 900px);
+  overflow: hidden;
+  background: #0d1a1e;
+}
+
+#game {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+.hud {
+  position: absolute;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.hud-top {
+  top: 16px;
+  left: 16px;
+  right: 184px;
+  min-height: 44px;
+}
+
+.brand,
+.stat,
+.meter,
+#minimap,
+.battle-panel,
+.pad,
+.flame-button {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(12px);
+}
+
+.brand {
+  flex: 0 0 auto;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.stat {
+  min-width: 92px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.stat span {
+  color: var(--ink);
+}
+
+.meter {
+  position: relative;
+  flex: 1 1 180px;
+  max-width: 320px;
+  height: 18px;
+  overflow: hidden;
+  border-radius: 999px;
+}
+
+.meter-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--danger), var(--gold), var(--green));
+  transition: width 160ms ease;
+}
+
+#minimap {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 4;
+  width: 150px;
+  height: 150px;
+  border-radius: 8px;
+}
+
+.battle-panel {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  z-index: 6;
+  width: min(520px, calc(100vw - 36px));
+  padding: 14px;
+  border-radius: 8px;
+  transform: translateX(-50%);
+}
+
+.battle-panel.hidden {
+  display: none;
+}
+
+.battle-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.battle-meter {
+  position: relative;
+  height: 10px;
+  margin-top: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.13);
+}
+
+#battleEnemyFill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #ff5964, #ffb34f);
+  transition: width 180ms ease;
+}
+
+#battleLog {
+  min-height: 38px;
+  margin: 10px 0 12px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.battle-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.battle-actions button {
+  min-height: 42px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.12);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.battle-actions button:hover,
+.battle-actions button:focus-visible {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 18px;
+  padding: 24px;
+  text-align: center;
+  background:
+    linear-gradient(rgba(5, 12, 18, 0.42), rgba(5, 12, 18, 0.62)),
+    radial-gradient(circle at center, transparent 0 20%, rgba(4, 8, 14, 0.64) 72%);
+}
+
+.overlay.hidden {
+  display: none;
+}
+
+.overlay h1 {
+  margin: 0;
+  font-size: clamp(48px, 9vw, 120px);
+  line-height: 0.88;
+  letter-spacing: 0;
+  text-shadow: 0 7px 0 rgba(0, 0, 0, 0.24);
+}
+
+.overlay p {
+  max-width: 520px;
+  margin: 0;
+  color: rgba(248, 251, 255, 0.82);
+  font-size: clamp(16px, 2.4vw, 22px);
+}
+
+.overlay button {
+  min-width: 138px;
+  min-height: 48px;
+  padding: 12px 22px;
+  border-radius: 8px;
+  background: #f4b94d;
+  color: #1d1303;
+  font-weight: 900;
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.34);
+}
+
+.touch-controls {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  left: 18px;
+  z-index: 5;
+  display: none;
+  align-items: end;
+  justify-content: space-between;
+  pointer-events: none;
+}
+
+.dpad {
+  position: relative;
+  width: 154px;
+  height: 154px;
+}
+
+.pad,
+.flame-button {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  font-weight: 900;
+  pointer-events: auto;
+  user-select: none;
+}
+
+.pad {
+  width: 50px;
+  height: 50px;
+}
+
+.pad:active,
+.flame-button:active {
+  transform: translateY(1px);
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.pad.up {
+  top: 0;
+  left: 52px;
+}
+
+.pad.left {
+  top: 52px;
+  left: 0;
+}
+
+.pad.right {
+  top: 52px;
+  right: 0;
+}
+
+.pad.down {
+  bottom: 0;
+  left: 52px;
+}
+
+.flame-button {
+  position: static;
+  width: 76px;
+  height: 76px;
+  border-radius: 50%;
+  background: rgba(123, 36, 28, 0.78);
+  color: #ffd77a;
+  font-size: 42px;
+}
+
+@media (pointer: coarse), (max-width: 820px) {
+  .hud-top {
+    right: 16px;
+    flex-wrap: wrap;
+  }
+
+  .brand {
+    width: 100%;
+    max-width: calc(100vw - 180px);
+  }
+
+  .meter {
+    flex-basis: 150px;
+  }
+
+  .touch-controls {
+    display: flex;
+  }
+
+  .battle-panel:not(.hidden) + .touch-controls {
+    display: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .hud-top {
+    gap: 8px;
+  }
+
+  .brand,
+  .stat {
+    padding: 8px 10px;
+    font-size: 13px;
+  }
+
+  #minimap {
+    width: 118px;
+    height: 118px;
+  }
+}

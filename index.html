@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Dragon World</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="game-shell">
+      <section class="stage" aria-label="Dragon World game">
+        <canvas id="game" width="1280" height="720"></canvas>
+
+        <div class="hud hud-top">
+          <div class="brand">Dragon World</div>
+          <div class="meter" aria-label="Health">
+            <span class="meter-fill" id="healthFill"></span>
+          </div>
+          <div class="stat"><span id="flockCount">0</span> allies</div>
+          <div class="stat"><span id="sparkCount">0</span> sparks</div>
+        </div>
+
+        <canvas id="minimap" width="150" height="150" aria-label="Minimap"></canvas>
+
+        <div class="battle-panel hidden" id="battlePanel" aria-live="polite">
+          <div class="battle-heading">
+            <span id="battleName">Encounter</span>
+            <span id="battleHealth">0 / 0</span>
+          </div>
+          <div class="battle-meter" aria-label="Enemy health">
+            <span id="battleEnemyFill"></span>
+          </div>
+          <p id="battleLog">A creature blocks your path.</p>
+          <div class="battle-actions">
+            <button data-battle-action="attack">Attack</button>
+            <button data-battle-action="fire">Fire</button>
+            <button data-battle-action="rally">Rally</button>
+            <button data-battle-action="flee">Flee</button>
+          </div>
+        </div>
+
+        <div class="touch-controls" aria-label="Touch controls">
+          <div class="dpad">
+            <button class="pad up" data-dir="up" aria-label="Move up">▲</button>
+            <button class="pad left" data-dir="left" aria-label="Move left">◀</button>
+            <button class="pad right" data-dir="right" aria-label="Move right">▶</button>
+            <button class="pad down" data-dir="down" aria-label="Move down">▼</button>
+          </div>
+          <button class="flame-button" id="flameButton" aria-label="Fire breath">⌁</button>
+        </div>
+
+        <div class="overlay" id="overlay">
+          <h1>Dragon World</h1>
+          <p id="overlayText">A young dragon wakes beneath a bright sky.</p>
+          <button id="startButton">Begin</button>
+        </div>
+      </section>
+    </main>
+
+    <script src="src/game.js"></script>
+  </body>
+</html>

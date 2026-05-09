@@ -19,13 +19,22 @@
           <div class="stat">Lv <span id="levelCount">1</span></div>
           <div class="stat"><span id="xpCount">0</span>/<span id="nextXpCount">10</span> XP</div>
           <div class="stat"><span id="flockCount">0</span> allies</div>
-          <div class="stat"><span id="sparkCount">0</span> sparks</div>
+          <div class="stat"><span id="gemCount">0</span> gems</div>
           <button class="stat stat-button" id="eatButton" type="button">
             Eat <span id="foodCount">0</span>
           </button>
+          <button class="stat stat-button" id="nestButton" type="button">Build Nest</button>
         </div>
 
         <canvas id="minimap" width="150" height="150" aria-label="Minimap"></canvas>
+
+        <div class="nest-panel hidden" id="nestPanel" aria-live="polite">
+          <div class="nest-heading">
+            <span>Home Nest</span>
+            <span id="nestStatus">No nest</span>
+          </div>
+          <div class="nest-roster" id="nestRoster"></div>
+        </div>
 
         <div class="battle-panel hidden" id="battlePanel" aria-live="polite">
           <div class="battle-heading">

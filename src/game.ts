@@ -9,9 +9,13 @@ const levelCount = document.getElementById("levelCount");
 const xpCount = document.getElementById("xpCount");
 const nextXpCount = document.getElementById("nextXpCount");
 const flockCount = document.getElementById("flockCount");
-const sparkCount = document.getElementById("sparkCount");
+const gemCount = document.getElementById("gemCount");
 const foodCount = document.getElementById("foodCount");
 const eatButton = document.getElementById("eatButton") as HTMLButtonElement;
+const nestButton = document.getElementById("nestButton") as HTMLButtonElement;
+const nestPanel = document.getElementById("nestPanel");
+const nestStatus = document.getElementById("nestStatus");
+const nestRoster = document.getElementById("nestRoster");
 const overlay = document.getElementById("overlay");
 const overlayText = document.getElementById("overlayText");
 const startButton = document.getElementById("startButton");
@@ -24,11 +28,13 @@ const battleLog = document.getElementById("battleLog");
 
 const WORLD = { width: 8400, height: 6400 };
 const FLIGHT = { min: 32, max: 430 };
+const FOOD_CARRY_MAX = 5;
 const lakes = [];
 const WATER_CLEARANCE = 90;
 const keys = new Set();
 const touchDirs = new Set();
 let rand = mulberry32(createWorldSeed());
+let rosterSignature = "";
 
 let renderer;
 let scene;
@@ -41,8 +47,9 @@ const state = {
   ready: false,
   running: false,
   lastTime: 0,
-  sparks: 0,
+  gems: 0,
   food: 0,
+  storedFood: 0,
   level: 1,
   xp: 0,
   shake: 0,
@@ -50,6 +57,7 @@ const state = {
   messageTime: 4,
   fireCooldown: 0,
   battle: null,
+  nestHealCooldown: 0,
 };
 
 const player = {
@@ -70,12 +78,14 @@ const player = {
 
 const dragons = [];
 const allies = [];
+const baseDragons = [];
 const enemies = [];
 const flames = [];
 const particles = [];
 const foods = [];
 const decorations = [];
 const obstacles = [];
+let nest = null;
 
 const dragonPalette = [
   ["#42c7a7", "#1f7568", "#d7fff3"],
@@ -89,6 +99,7 @@ const enemyKinds = [
   { name: "griffin", color: "#a36a3a", accent: "#e5c17b", radius: 30, speed: 170, health: 10, power: 8 },
   { name: "manticore", color: "#8f3744", accent: "#f09a74", radius: 35, speed: 132, health: 14, power: 11 },
   { name: "wyvern", color: "#496070", accent: "#a7d6d4", radius: 32, speed: 150, health: 12, power: 9 },
+  { name: "phoenix", color: "#e24a2c", accent: "#ffd166", radius: 38, speed: 185, health: 22, power: 16, shape: "phoenix" },
 ];
 
 bootstrap();
@@ -142,6 +153,7 @@ function initWorld(progress = null) {
   clearGroup(particleGroup);
   dragons.length = 0;
   allies.length = 0;
+  baseDragons.length = 0;
   enemies.length = 0;
   flames.length = 0;
   particles.length = 0;
@@ -149,16 +161,21 @@ function initWorld(progress = null) {
   decorations.length = 0;
   obstacles.length = 0;
   lakes.length = 0;
-  state.sparks = progress?.sparks ?? 0;
+  nest = null;
+  rosterSignature = "";
   state.food = progress?.food ?? 0;
+  state.storedFood = progress?.storedFood ?? 0;
+  state.gems = progress?.gems ?? 0;
   state.level = progress?.level ?? 1;
   state.xp = progress?.xp ?? 0;
   state.fireCooldown = 0;
+  state.nestHealCooldown = 0;
   state.shake = 0;
   state.battle = null;
   state.message = "Find the scattered dragons.";
   state.messageTime = 4;
   battlePanel.classList.add("hidden");
+  nestPanel.classList.add("hidden");
 
   player.x = WORLD.width * 0.5;
   player.y = WORLD.height * 0.5;
@@ -173,6 +190,13 @@ function initWorld(progress = null) {
 
   randomizeLakes();
   makeTerrain();
+  if (progress?.nest) {
+    const nestPosition =
+      isWaterArea(progress.nest.x, progress.nest.y, 180) || isObstacleArea(progress.nest.x, progress.nest.y, 180)
+        ? findDryPosition(150, 180)
+        : progress.nest;
+    createNest(nestPosition.x, nestPosition.y, false);
+  }
   player.mesh = makeDragonMesh(dragonPalette[0], 1.18);
   entityGroup.add(player.mesh);
 
@@ -186,10 +210,12 @@ function initWorld(progress = null) {
       r: radius,
       type,
       hue: rand(),
+      mesh: null,
     };
+    item.mesh = makeDecoration(item);
     decorations.push(item);
-    addDecorationObstacle(item);
-    worldGroup.add(makeDecoration(item));
+    if (item.type !== "crystal") addDecorationObstacle(item);
+    worldGroup.add(item.mesh);
   }
 
   for (let i = 0; i < 20; i += 1) {
@@ -295,8 +321,17 @@ function randomizeLakes() {
 
 function makeLakes(waterMaterial) {
   const group = new THREE.Group();
+  const sandMaterial = new THREE.MeshStandardMaterial({ color: 0xd8bf79, roughness: 0.96 });
   const shoreMaterial = new THREE.MeshStandardMaterial({ color: 0x8ca36e, roughness: 0.9 });
   lakes.forEach((lakeData) => {
+    const sand = new THREE.Mesh(new THREE.CircleGeometry(1, 72), sandMaterial);
+    sand.rotation.x = -Math.PI / 2;
+    sand.rotation.z = lakeData.rotation;
+    sand.scale.set(lakeData.rx + 72, lakeData.rz + 58, 1);
+    sand.position.set(lakeData.x, 0.65, lakeData.z);
+    sand.receiveShadow = true;
+    group.add(sand);
+
     const lake = new THREE.Mesh(new THREE.CircleGeometry(1, 72), waterMaterial);
     lake.rotation.x = -Math.PI / 2;
     lake.rotation.z = lakeData.rotation;
@@ -799,6 +834,8 @@ function makeWing(ax, az, bx, bz, cx, cz, material) {
 }
 
 function makeEnemyMesh(enemy) {
+  if (enemy.shape === "phoenix") return makePhoenixMesh(enemy);
+
   const group = new THREE.Group();
   const bodyMaterial = new THREE.MeshStandardMaterial({ color: enemy.color, roughness: 0.72 });
   const shellMaterial = new THREE.MeshStandardMaterial({ color: enemy.accent, roughness: 0.58, metalness: 0.08 });
@@ -867,6 +904,162 @@ function makeEnemyMesh(enemy) {
   group.traverse((child) => {
     if (child.isMesh) child.castShadow = true;
   });
+  return group;
+}
+
+function makePhoenixMesh(enemy) {
+  const group = new THREE.Group();
+  const bodyMaterial = new THREE.MeshStandardMaterial({
+    color: enemy.color,
+    emissive: 0x5c1208,
+    emissiveIntensity: 0.45,
+    roughness: 0.46,
+  });
+  const wingMaterial = new THREE.MeshStandardMaterial({
+    color: enemy.accent,
+    emissive: 0xff6f1f,
+    emissiveIntensity: 0.85,
+    roughness: 0.34,
+    side: THREE.DoubleSide,
+  });
+  const wingBoneMaterial = new THREE.MeshStandardMaterial({
+    color: 0x9f2320,
+    emissive: 0x3f0708,
+    emissiveIntensity: 0.45,
+    roughness: 0.5,
+  });
+  const wingMembraneMaterial = new THREE.MeshStandardMaterial({
+    color: 0xff8f3f,
+    emissive: 0xff4c1e,
+    emissiveIntensity: 0.72,
+    transparent: true,
+    opacity: 0.82,
+    roughness: 0.36,
+    side: THREE.DoubleSide,
+  });
+  const darkFeatherMaterial = new THREE.MeshStandardMaterial({
+    color: 0x8f1f26,
+    emissive: 0x3f0708,
+    emissiveIntensity: 0.55,
+    roughness: 0.5,
+  });
+  const beakMaterial = new THREE.MeshStandardMaterial({ color: 0xffd782, roughness: 0.4 });
+  const eyeMaterial = new THREE.MeshStandardMaterial({ color: 0xfff7b0, emissive: 0xffbc35, emissiveIntensity: 1.4 });
+
+  const body = new THREE.Mesh(new THREE.SphereGeometry(enemy.radius * 0.62, 18, 14), bodyMaterial);
+  body.scale.set(1.22, 1.08, 0.58);
+  body.position.set(-enemy.radius * 0.22, 30, 0);
+  group.add(body);
+
+  const haunch = new THREE.Mesh(new THREE.SphereGeometry(enemy.radius * 0.48, 16, 12), bodyMaterial);
+  haunch.scale.set(1.18, 0.9, 0.56);
+  haunch.position.set(-enemy.radius * 0.84, 27, 0);
+  group.add(haunch);
+
+  const chest = new THREE.Mesh(new THREE.SphereGeometry(enemy.radius * 0.4, 14, 10), wingMaterial);
+  chest.scale.set(0.78, 0.8, 0.46);
+  chest.position.set(enemy.radius * 0.32, 31, 0);
+  group.add(chest);
+
+  const neck = new THREE.Mesh(new THREE.SphereGeometry(enemy.radius * 0.3, 14, 10), bodyMaterial);
+  neck.scale.set(1.15, 0.68, 0.58);
+  neck.rotation.z = 0.34;
+  neck.position.set(enemy.radius * 0.5, 43, 0);
+  group.add(neck);
+
+  const head = new THREE.Mesh(new THREE.SphereGeometry(enemy.radius * 0.32, 14, 10), bodyMaterial);
+  head.scale.set(0.88, 0.96, 0.78);
+  head.position.set(enemy.radius * 0.82, 54, 0);
+  group.add(head);
+
+  const beak = new THREE.Mesh(new THREE.ConeGeometry(enemy.radius * 0.12, enemy.radius * 0.42, 8), beakMaterial);
+  beak.rotation.z = -Math.PI / 2;
+  beak.position.set(enemy.radius * 1.14, 53, 0);
+  group.add(beak);
+
+  const eyeA = new THREE.Mesh(new THREE.SphereGeometry(2.8, 8, 8), eyeMaterial);
+  eyeA.position.set(enemy.radius * 0.98, 58, enemy.radius * 0.14);
+  const eyeB = eyeA.clone();
+  eyeB.position.z = -enemy.radius * 0.14;
+  group.add(eyeA, eyeB);
+
+  for (let side = -1; side <= 1; side += 2) {
+    const wing = makePhoenixWing(side, enemy.radius, wingBoneMaterial, wingMembraneMaterial, wingMaterial);
+    group.add(wing);
+
+    for (let i = 0; i < 3; i += 1) {
+      const crest = new THREE.Mesh(new THREE.ConeGeometry(3.8 - i * 0.45, 22 - i * 3, 5), wingMaterial);
+      crest.position.set(enemy.radius * 0.48 - i * 2, 67 + i * 2, side * (3 + i * 3));
+      crest.rotation.z = -0.35 + i * 0.12;
+      crest.rotation.x = side * 0.45;
+      group.add(crest);
+    }
+  }
+
+  for (let i = 0; i < 7; i += 1) {
+    const t = i / 6;
+    const feather = new THREE.Mesh(
+      new THREE.ConeGeometry(enemy.radius * (0.12 - t * 0.035), enemy.radius * (1.0 - t * 0.08), 7),
+      i % 2 === 0 ? wingMaterial : darkFeatherMaterial
+    );
+    feather.position.set(-enemy.radius * (0.52 + t * 0.38), 25 - t * 10, (i - 3) * enemy.radius * 0.11);
+    feather.rotation.z = Math.PI / 2.5 + t * 0.28;
+    feather.rotation.y = (i - 3) * 0.18;
+    group.add(feather);
+  }
+
+  const label = makeEnemyLevelLabel(enemy.level || 1);
+  label.position.set(0, 92, 0);
+  group.add(label);
+
+  group.traverse((child) => {
+    if (child.isMesh) child.castShadow = true;
+  });
+  return group;
+}
+
+function makePhoenixWing(side, radius, boneMaterial, membraneMaterial, accentMaterial) {
+  const group = new THREE.Group();
+  const scale = radius / 30;
+  const root = new THREE.Vector3(-radius * 0.12, 43, side * radius * 0.48);
+  const elbow = new THREE.Vector3(-radius * 0.9, 82, side * radius * 1.45);
+  const tip = new THREE.Vector3(-radius * 2.65, 66, side * radius * 2.82);
+  const fingers = [
+    new THREE.Vector3(-radius * 0.82, 42, side * radius * 1.34),
+    new THREE.Vector3(-radius * 1.35, 30, side * radius * 1.9),
+    new THREE.Vector3(-radius * 2.02, 30, side * radius * 2.4),
+    new THREE.Vector3(-radius * 2.74, 44, side * radius * 2.62),
+  ];
+
+  group.add(makeBone([root, elbow, tip], boneMaterial, 2.7 * scale));
+  fingers.forEach((finger, index) => {
+    const knuckle = new THREE.Vector3(
+      root.x - radius * (0.25 + index * 0.28),
+      root.y + radius * (0.36 - index * 0.08),
+      root.z + side * radius * (0.52 + index * 0.34)
+    );
+    group.add(makeBone([root, knuckle, finger], boneMaterial, (1.55 - index * 0.12) * scale));
+  });
+
+  group.add(makeMembrane([root, fingers[0], elbow], membraneMaterial));
+  group.add(makeMembrane([elbow, fingers[0], fingers[1]], membraneMaterial));
+  group.add(makeMembrane([elbow, fingers[1], fingers[2]], membraneMaterial));
+  group.add(makeMembrane([elbow, fingers[2], tip], membraneMaterial));
+  group.add(makeMembrane([tip, fingers[2], fingers[3]], membraneMaterial));
+
+  fingers.forEach((finger, index) => {
+    const ember = new THREE.Mesh(new THREE.ConeGeometry((3.4 - index * 0.25) * scale, (20 - index * 1.8) * scale, 5), accentMaterial);
+    ember.position.copy(finger);
+    ember.rotation.z = side > 0 ? 0.88 : -0.88;
+    ember.rotation.x = side > 0 ? 0.32 : -0.32;
+    group.add(ember);
+  });
+
+  const shoulder = new THREE.Mesh(new THREE.SphereGeometry(radius * 0.18, 10, 8), accentMaterial);
+  shoulder.scale.set(1.2, 0.42, 0.78);
+  shoulder.position.copy(root);
+  group.add(shoulder);
+
   return group;
 }
 
@@ -1046,6 +1239,7 @@ function loop(now) {
 
 function update(dt) {
   state.fireCooldown = Math.max(0, state.fireCooldown - dt);
+  state.nestHealCooldown = Math.max(0, state.nestHealCooldown - dt);
   state.shake = Math.max(0, state.shake - dt * 18);
   state.messageTime = Math.max(0, state.messageTime - dt);
   player.invulnerable = Math.max(0, player.invulnerable - dt);
@@ -1091,10 +1285,12 @@ function update(dt) {
   player.y = clamp(player.y, 70, WORLD.height - 70);
 
   updateAllies(dt);
+  updateBaseDragons(dt);
   updateDragons(dt);
   updateEnemies(dt);
   updateFlames(dt);
   updateFoods(dt);
+  updateGems(dt);
   updateParticles(dt);
   updateMeshes(dt);
   updateHud();
@@ -1132,11 +1328,14 @@ function transitionToNewWorld(exitSide, rawX, rawY) {
     health: player.health,
     maxHealth: player.maxHealth,
     altitude: player.altitude,
-    sparks: state.sparks,
     food: state.food,
+    storedFood: state.storedFood,
+    gems: state.gems,
     level: state.level,
     xp: state.xp,
     allies: allies.map((ally) => ally.colors),
+    baseDragons: baseDragons.map((dragon) => dragon.colors),
+    nest: nest ? { x: nest.x, y: nest.y } : null,
   };
   initWorld(carried);
   const spawn = findEdgeSpawn(exitSide, rawX, rawY);
@@ -1149,6 +1348,7 @@ function transitionToNewWorld(exitSide, rawX, rawY) {
   state.message = "A new world square unfolds.";
   state.messageTime = 2.8;
   restoreAllies(carried.allies);
+  restoreBaseDragons(carried.baseDragons);
   updateMeshes(0);
 }
 
@@ -1192,6 +1392,32 @@ function restoreAllies(allyColors) {
   });
 }
 
+function restoreBaseDragons(dragonColors) {
+  baseDragons.length = 0;
+  dragonColors.forEach((colors, index) => {
+    const dragon = makeBaseDragon(colors, index);
+    baseDragons.push(dragon);
+    entityGroup.add(dragon.mesh);
+  });
+  arrangeBaseDragons();
+}
+
+function makeBaseDragon(colors, index) {
+  const position = getNestPerchPosition(index);
+  return {
+    x: position.x,
+    y: position.y,
+    radius: 30,
+    altitude: FLIGHT.min + 8,
+    vz: 0,
+    angle: position.angle + Math.PI,
+    colors,
+    joined: true,
+    bob: rand() * 10,
+    mesh: makeDragonMesh(colors, 0.86),
+  };
+}
+
 function updateAllies(dt) {
   allies.forEach((ally, index) => {
     const target = index === 0 ? player : allies[index - 1];
@@ -1213,6 +1439,18 @@ function updateAllies(dt) {
   });
 }
 
+function updateBaseDragons(dt) {
+  if (!nest) return;
+  baseDragons.forEach((dragon, index) => {
+    const position = getNestPerchPosition(index);
+    dragon.x += (position.x - dragon.x) * Math.min(1, dt * 2.5);
+    dragon.y += (position.y - dragon.y) * Math.min(1, dt * 2.5);
+    dragon.altitude = FLIGHT.min + 8 + Math.sin(dragon.bob) * 3;
+    dragon.angle += angleDelta(dragon.angle, position.angle + Math.PI) * Math.min(1, dt * 2.5);
+    dragon.bob += dt * 2;
+  });
+}
+
 function updateDragons(dt) {
   dragons.forEach((dragon) => {
     if (dragon.joined) return;
@@ -1227,6 +1465,144 @@ function updateDragons(dt) {
       heal(9);
     }
   });
+}
+
+function buildNest() {
+  if (!state.running || nest || state.battle) return;
+  if (player.altitude > 120) {
+    state.message = "Land before building a nest.";
+    state.messageTime = 2;
+    return;
+  }
+  createNest(player.x, player.y, true);
+}
+
+function createNest(x, y, announce) {
+  nest = {
+    x: clamp(x, 180, WORLD.width - 180),
+    y: clamp(y, 180, WORLD.height - 180),
+    radius: 150,
+    mesh: makeNestMesh(),
+  };
+  nest.mesh.position.set(nest.x, 4, nest.y);
+  worldGroup.add(nest.mesh);
+  nestPanel.classList.remove("hidden");
+  if (announce) {
+    state.message = "Your home nest is ready.";
+    state.messageTime = 2.8;
+    burst(nest.x, nest.y, "#f4c66f", 24);
+  }
+  updateHud();
+}
+
+function useNest() {
+  if (!state.running || state.battle) return;
+  if (!nest) {
+    buildNest();
+    return;
+  }
+  if (!isAtNest()) {
+    state.message = "Return to your nest to use it.";
+    state.messageTime = 2;
+    return;
+  }
+  if (player.health >= player.maxHealth) {
+    state.message = "You are already fully healed.";
+    state.messageTime = 1.8;
+    return;
+  }
+  if (state.nestHealCooldown > 0) return;
+  heal(Math.ceil(player.maxHealth * 0.34));
+  state.nestHealCooldown = 1.5;
+  state.message = "The nest restores your strength.";
+  state.messageTime = 2.4;
+  burst(player.x, player.y, "#9fffd0", 18);
+  updateHud();
+}
+
+function sendAllyHome(index) {
+  if (!nest || !isAtNest() || state.battle) return;
+  const ally = allies[index];
+  if (!ally) return;
+  allies.splice(index, 1);
+  const position = getNestPerchPosition(baseDragons.length);
+  ally.x = position.x;
+  ally.y = position.y;
+  ally.altitude = FLIGHT.min + 8;
+  ally.angle = position.angle + Math.PI;
+  baseDragons.push(ally);
+  arrangeBaseDragons();
+  rosterSignature = "";
+  state.message = "A dragon stays at the nest.";
+  state.messageTime = 2;
+  updateHud();
+}
+
+function bringDragonOnAdventure(index) {
+  if (!nest || !isAtNest() || state.battle) return;
+  const dragon = baseDragons[index];
+  if (!dragon) return;
+  baseDragons.splice(index, 1);
+  const gap = 92 + allies.length * 12;
+  dragon.x = clamp(player.x - Math.cos(player.angle) * gap, 70, WORLD.width - 70);
+  dragon.y = clamp(player.y - Math.sin(player.angle) * gap, 70, WORLD.height - 70);
+  dragon.altitude = player.altitude;
+  dragon.angle = player.angle;
+  allies.push(dragon);
+  arrangeBaseDragons();
+  rosterSignature = "";
+  state.message = "A dragon joins the adventure.";
+  state.messageTime = 2;
+  updateHud();
+}
+
+function storeFoodAtNest() {
+  if (!nest || !isAtNest() || state.battle || state.food <= 0) return;
+  state.storedFood += state.food;
+  state.food = 0;
+  rosterSignature = "";
+  state.message = "Food stored at the nest.";
+  state.messageTime = 2;
+  updateHud();
+}
+
+function takeFoodFromNest() {
+  if (!nest || !isAtNest() || state.battle || state.storedFood <= 0 || state.food >= FOOD_CARRY_MAX) return;
+  const amount = Math.min(FOOD_CARRY_MAX - state.food, state.storedFood);
+  state.storedFood -= amount;
+  state.food += amount;
+  rosterSignature = "";
+  state.message = "Food packed for the road.";
+  state.messageTime = 2;
+  updateHud();
+}
+
+function arrangeBaseDragons() {
+  if (!nest) return;
+  baseDragons.forEach((dragon, index) => {
+    const position = getNestPerchPosition(index);
+    dragon.x = position.x;
+    dragon.y = position.y;
+    dragon.angle = position.angle + Math.PI;
+  });
+}
+
+function getNestPerchPosition(index) {
+  if (!nest) return { x: player.x, y: player.y, angle: player.angle };
+  const ring = Math.floor(index / 8);
+  const slot = index % 8;
+  const count = Math.min(8, Math.max(1, baseDragons.length || 1));
+  const angle = (slot / count) * Math.PI * 2 + ring * 0.45;
+  const radius = nest.radius + 44 + ring * 58;
+  return {
+    x: clamp(nest.x + Math.cos(angle) * radius, 70, WORLD.width - 70),
+    y: clamp(nest.y + Math.sin(angle) * radius, 70, WORLD.height - 70),
+    angle,
+  };
+}
+
+function isAtNest() {
+  return Boolean(nest) && player.altitude < 140 && distance(player, nest) < nest.radius + player.radius + 100;
 }
 
 function updateEnemies(dt) {
@@ -1256,12 +1632,37 @@ function updateFoods(dt) {
       food.mesh.rotation.y += dt * 1.4;
     }
     if (player.altitude < 115 && distance(player, food) < player.radius + food.radius) {
+      if (state.food >= FOOD_CARRY_MAX) {
+        state.message = nest ? "Food pouch full. Return to the nest to store more." : "Food pouch full.";
+        state.messageTime = 1.2;
+        continue;
+      }
       state.food += 1;
       state.message = "Food collected.";
       state.messageTime = 1.8;
       burst(food.x, food.y, "#ffcf6e", 12);
       entityGroup.remove(food.mesh);
       foods.splice(i, 1);
+      updateHud();
+    }
+  }
+}
+
+function updateGems(dt) {
+  for (let i = decorations.length - 1; i >= 0; i -= 1) {
+    const gem = decorations[i];
+    if (gem.type !== "crystal") continue;
+    if (gem.mesh) {
+      gem.mesh.rotation.y += dt * 1.2;
+      gem.mesh.position.y = gem.r * 0.5 + Math.sin(performance.now() * 0.003 + gem.hue * 10) * 3;
+    }
+    if (player.altitude < 120 && distance(player, gem) < player.radius + gem.r + 18) {
+      state.gems += 1;
+      state.message = "Gem collected.";
+      state.messageTime = 1.8;
+      burst(gem.x, gem.y, gem.hue > 0.5 ? "#6be7d8" : "#c58cff", 14);
+      worldGroup.remove(gem.mesh);
+      decorations.splice(i, 1);
       updateHud();
     }
   }
@@ -1410,7 +1811,6 @@ function getEnemyExperienceForLevel(kind, level) {
 }
 
 function defeatEnemy(enemy) {
-  state.sparks += 1;
   grantExperience(enemy.xp || getEnemyExperienceForLevel(enemy, enemy.level || 1));
   burst(enemy.x, enemy.y, "#ffd166", 24);
   dropFood(enemy.x, enemy.y);
@@ -1449,6 +1849,44 @@ function makeFoodMesh() {
   group.traverse((child) => {
     if (child.isMesh) child.castShadow = true;
   });
+  return group;
+}
+
+function makeNestMesh() {
+  const group = new THREE.Group();
+  const strawMaterial = new THREE.MeshStandardMaterial({ color: 0xb88445, roughness: 0.9 });
+  const darkStrawMaterial = new THREE.MeshStandardMaterial({ color: 0x6f4a2b, roughness: 0.95 });
+  const warmEarthMaterial = new THREE.MeshStandardMaterial({ color: 0x8f6b3a, roughness: 0.92 });
+  const eggMaterial = new THREE.MeshStandardMaterial({ color: 0xe8f2da, roughness: 0.48 });
+
+  const floor = new THREE.Mesh(new THREE.CylinderGeometry(112, 128, 10, 28), warmEarthMaterial);
+  floor.position.y = 2;
+  floor.receiveShadow = true;
+  group.add(floor);
+
+  for (let i = 0; i < 18; i += 1) {
+    const angle = (i / 18) * Math.PI * 2;
+    const length = 98 + rand() * 54;
+    const twig = new THREE.Mesh(
+      new THREE.CylinderGeometry(5 + rand() * 3, 7 + rand() * 4, length, 7),
+      i % 2 === 0 ? strawMaterial : darkStrawMaterial
+    );
+    twig.position.set(Math.cos(angle) * 78, 13 + rand() * 7, Math.sin(angle) * 78);
+    twig.rotation.z = Math.PI / 2 + (rand() - 0.5) * 0.35;
+    twig.rotation.y = -angle + (rand() - 0.5) * 0.45;
+    twig.castShadow = true;
+    twig.receiveShadow = true;
+    group.add(twig);
+  }
+
+  for (let i = 0; i < 3; i += 1) {
+    const egg = new THREE.Mesh(new THREE.SphereGeometry(15, 14, 12), eggMaterial);
+    egg.scale.set(0.82, 1.22, 0.82);
+    egg.position.set(Math.cos(i * 2.1) * 24, 25, Math.sin(i * 2.1) * 18);
+    egg.castShadow = true;
+    group.add(egg);
+  }
+
   return group;
 }
 
@@ -1586,6 +2024,7 @@ function updateMeshes(dt) {
     if (!dragon.joined) positionDragon(dragon, dragon.mesh, (dragon.altitude || FLIGHT.min) + Math.sin(dragon.bob) * 6);
   });
   allies.forEach((ally, index) => positionDragon(ally, ally.mesh, (ally.altitude || FLIGHT.min) + Math.sin(ally.bob + index) * 5));
+  baseDragons.forEach((dragon, index) => positionDragon(dragon, dragon.mesh, (dragon.altitude || FLIGHT.min) + Math.sin(dragon.bob + index) * 4));
 
   enemies.forEach((enemy) => {
     enemy.mesh.position.set(enemy.x, 27 + Math.sin(performance.now() * 0.004 + enemy.x) * 3, enemy.y);
@@ -1679,9 +2118,97 @@ function updateHud() {
   xpCount.textContent = String(state.xp);
   nextXpCount.textContent = String(getNextLevelXp());
   flockCount.textContent = String(allies.length);
-  sparkCount.textContent = String(state.sparks);
-  foodCount.textContent = String(state.food);
+  gemCount.textContent = String(state.gems);
+  foodCount.textContent = `${state.food}/${FOOD_CARRY_MAX}`;
   eatButton.disabled = state.food <= 0 || player.health >= player.maxHealth;
+  nestButton.textContent = nest ? "Heal Nest" : "Build Nest";
+  nestButton.disabled = state.battle || (nest ? !isAtNest() || player.health >= player.maxHealth : player.altitude > 120);
+  updateNestPanel();
+}
+
+function updateNestPanel() {
+  if (!nest) {
+    nestPanel.classList.add("hidden");
+    rosterSignature = "";
+    return;
+  }
+
+  const atNest = isAtNest();
+  nestPanel.classList.remove("hidden");
+  nestStatus.textContent = atNest ? "At base" : "Away";
+  const signature = [
+    atNest ? "near" : "far",
+    state.battle ? "battle" : "free",
+    `${state.food}:${state.storedFood}`,
+    allies.map((ally) => ally.colors.join(":")).join("|"),
+    baseDragons.map((dragon) => dragon.colors.join(":")).join("|"),
+  ].join("/");
+  if (signature === rosterSignature) return;
+  rosterSignature = signature;
+  nestRoster.replaceChildren();
+  nestRoster.appendChild(makeNestFoodRow(atNest));
+
+  allies.forEach((ally, index) => {
+    nestRoster.appendChild(makeNestRosterRow(ally, `Ally ${index + 1}`, "Send Home", !atNest || state.battle, () => sendAllyHome(index)));
+  });
+  baseDragons.forEach((dragon, index) => {
+    nestRoster.appendChild(makeNestRosterRow(dragon, `Resting ${index + 1}`, "Adventure", !atNest || state.battle, () => bringDragonOnAdventure(index)));
+  });
+  if (!allies.length && !baseDragons.length) {
+    const empty = document.createElement("div");
+    empty.className = "nest-name";
+    empty.textContent = "No dragons have joined yet.";
+    nestRoster.appendChild(empty);
+  }
+}
+
+function makeNestFoodRow(atNest) {
+  const row = document.createElement("div");
+  row.className = "nest-row nest-food-row";
+
+  const name = document.createElement("span");
+  name.className = "nest-name";
+  name.textContent = `Stored food: ${state.storedFood}`;
+
+  const storeButton = document.createElement("button");
+  storeButton.className = "nest-action";
+  storeButton.type = "button";
+  storeButton.textContent = "Store";
+  storeButton.disabled = !atNest || state.battle || state.food <= 0;
+  storeButton.addEventListener("click", storeFoodAtNest);
+
+  const takeButton = document.createElement("button");
+  takeButton.className = "nest-action";
+  takeButton.type = "button";
+  takeButton.textContent = "Take";
+  takeButton.disabled = !atNest || state.battle || state.storedFood <= 0 || state.food >= FOOD_CARRY_MAX;
+  takeButton.addEventListener("click", takeFoodFromNest);
+
+  row.append(name, storeButton, takeButton);
+  return row;
+}
+
+function makeNestRosterRow(dragon, label, actionLabel, disabled, action) {
+  const row = document.createElement("div");
+  row.className = "nest-row";
+
+  const swatch = document.createElement("span");
+  swatch.className = "nest-swatch";
+  swatch.style.background = `linear-gradient(135deg, ${dragon.colors[0]}, ${dragon.colors[2]})`;
+
+  const name = document.createElement("span");
+  name.className = "nest-name";
+  name.textContent = label;
+
+  const button = document.createElement("button");
+  button.className = "nest-action";
+  button.type = "button";
+  button.textContent = actionLabel;
+  button.disabled = disabled;
+  button.addEventListener("click", action);
+
+  row.append(swatch, name, button);
+  return row;
 }
 
 function render() {
@@ -1700,6 +2227,12 @@ function drawMinimap() {
   dot(mapCtx, (player.x / WORLD.width) * w, (player.y / WORLD.height) * h, 4);
   mapCtx.fillStyle = "#92d7ff";
   allies.forEach((a) => dot(mapCtx, (a.x / WORLD.width) * w, (a.y / WORLD.height) * h, 2.5));
+  if (nest) {
+    mapCtx.fillStyle = "#f4c66f";
+    dot(mapCtx, (nest.x / WORLD.width) * w, (nest.y / WORLD.height) * h, 4);
+  }
+  mapCtx.fillStyle = "#caa0ff";
+  baseDragons.forEach((d) => dot(mapCtx, (d.x / WORLD.width) * w, (d.y / WORLD.height) * h, 2.3));
   mapCtx.fillStyle = "#f3cf68";
   dragons.forEach((d) => {
     if (!d.joined) dot(mapCtx, (d.x / WORLD.width) * w, (d.y / WORLD.height) * h, 2.5);
@@ -1773,6 +2306,10 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
+function angleDelta(from, to) {
+  return Math.atan2(Math.sin(to - from), Math.cos(to - from));
+}
+
 function capitalize(value) {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
@@ -1798,6 +2335,7 @@ window.addEventListener("keydown", (event) => {
     else startGame();
   }
   if (key === "h") eatFood();
+  if (key === "n") useNest();
 });
 
 window.addEventListener("keyup", (event) => {
@@ -1807,6 +2345,7 @@ window.addEventListener("keyup", (event) => {
 startButton.addEventListener("click", startGame);
 flameButton.addEventListener("pointerdown", breatheFire);
 eatButton.addEventListener("click", eatFood);
+nestButton.addEventListener("click", useNest);
 document.querySelectorAll<HTMLButtonElement>("[data-battle-action]").forEach((button) => {
   button.addEventListener("click", () => performBattleAction(button.dataset.battleAction));
 });

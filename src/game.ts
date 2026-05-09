@@ -1,7 +1,7 @@
 import * as THREE from "three";
 
-const canvas = document.getElementById("game");
-const minimap = document.getElementById("minimap");
+const canvas = document.getElementById("game") as HTMLCanvasElement;
+const minimap = document.getElementById("minimap") as HTMLCanvasElement;
 const mapCtx = minimap.getContext("2d");
 
 const healthFill = document.getElementById("healthFill");
@@ -11,7 +11,7 @@ const nextXpCount = document.getElementById("nextXpCount");
 const flockCount = document.getElementById("flockCount");
 const sparkCount = document.getElementById("sparkCount");
 const foodCount = document.getElementById("foodCount");
-const eatButton = document.getElementById("eatButton");
+const eatButton = document.getElementById("eatButton") as HTMLButtonElement;
 const overlay = document.getElementById("overlay");
 const overlayText = document.getElementById("overlayText");
 const startButton = document.getElementById("startButton");
@@ -204,6 +204,7 @@ function initWorld(progress = null) {
       colors: dragonPalette[i % dragonPalette.length],
       joined: false,
       bob: rand() * 10,
+      mesh: null,
     };
     dragon.mesh = makeDragonMesh(dragon.colors, 0.95);
     dragons.push(dragon);
@@ -230,6 +231,7 @@ function initWorld(progress = null) {
       battleCooldown: 0,
       wander: rand() * Math.PI * 2,
       wake: 500 + rand() * 330,
+      mesh: null,
     };
     enemy.mesh = makeEnemyMesh(enemy);
     enemies.push(enemy);
@@ -1634,6 +1636,7 @@ function breatheFire() {
       speed: 570,
       radius: 18,
       life: 0.38,
+      mesh: null,
     };
     flame.mesh = makeFlameMesh();
     flames.push(flame);
@@ -1804,11 +1807,11 @@ window.addEventListener("keyup", (event) => {
 startButton.addEventListener("click", startGame);
 flameButton.addEventListener("pointerdown", breatheFire);
 eatButton.addEventListener("click", eatFood);
-document.querySelectorAll("[data-battle-action]").forEach((button) => {
+document.querySelectorAll<HTMLButtonElement>("[data-battle-action]").forEach((button) => {
   button.addEventListener("click", () => performBattleAction(button.dataset.battleAction));
 });
 
-document.querySelectorAll("[data-dir]").forEach((button) => {
+document.querySelectorAll<HTMLButtonElement>("[data-dir]").forEach((button) => {
   const dir = button.dataset.dir;
   button.addEventListener("pointerdown", (event) => {
     event.preventDefault();
